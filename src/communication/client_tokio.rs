@@ -16,7 +16,11 @@ struct CommunicationConnection {
 }
 
 impl CommunicationConnection {
-    fn start_receiving(&mut self, mut stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>, mut storage: impl Storage + Send + 'static) {
+    fn start_receiving(&mut self,
+        mut stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>, 
+        mut storage: impl Storage + Send + 'static,
+        on_disconnect: Arc<std::sync::Mutex<Option<Box<dyn Fn () + Send + Sync>>>>
+    ) {
         let handle = tokio::spawn(async move {
             while let Some(item) = stream.next().await {
                 if item.is_ok() {
@@ -34,6 +38,17 @@ impl CommunicationConnection {
                         }
                     }
                 }
+            }
+
+            if let Ok(item) = on_disconnect.lock() {
+                if let Some(handler) = item.as_ref() {
+                    info!("Executing on_disconnect handler");
+                    handler();
+                } else {
+                    info!("No on_disconnect handler set");
+                }
+            } else {
+                error!("Error while trying to lock on_disconnect handler");
             }
         });
 
@@ -83,6 +98,7 @@ pub struct CommunicationClient {
     _endpoint: Uri,
     _state : ConnectionState,
     _actions: UpdatableActionStorage,
+    _on_disconnect: Arc<std::sync::Mutex<Option<Box<dyn Fn () + Send + Sync>>>>,
 }
 
 impl Clone for CommunicationClient {
@@ -91,6 +107,7 @@ impl Clone for CommunicationClient {
             _endpoint: self._endpoint.clone(), 
             _state: self._state.clone(),
             _actions: self._actions.clone(),
+            _on_disconnect: Arc::clone(&self._on_disconnect),
         }
     }
 }
@@ -110,6 +127,10 @@ impl Communication for CommunicationClient {
 
     fn get_storage(&self) -> Result<crate::execution::UpdatableActionStorage, String> {
         Ok(self._actions.clone())
+    }
+
+    fn get_on_disconnected(&self) -> Arc<std::sync::Mutex<Option<Box<dyn Fn () + Send + Sync>>>> {
+        self._on_disconnect.clone()
     }
     
     async fn send<T: serde::Serialize>(&mut self, data: T) -> Result<(), String> {
@@ -157,6 +178,7 @@ impl CommunicationClient {
             _endpoint: endpoint,           
             _state: ConnectionState::NotConnected,
             _actions: UpdatableActionStorage::new(),
+            _on_disconnect: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -192,7 +214,7 @@ impl CommunicationClient {
             
                     if let Some(hand) = read.next().await {
                         if hand.is_ok() {
-                            connection.start_receiving(read, self._actions.clone());                
+                            connection.start_receiving(read, self._actions.clone(), self._on_disconnect.clone());                          
                             self._state = ConnectionState::Connected(Arc::new(Mutex::new(connection)));
         
                             Ok(())

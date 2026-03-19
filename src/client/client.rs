@@ -1,5 +1,7 @@
+use std::sync::{Arc, Mutex};
+
 use futures::Stream;
-use log::info;
+use log::{error, info};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -123,6 +125,7 @@ use super::{ConnectionConfiguration, InvocationContext};
 pub struct SignalRClient {
     _actions: UpdatableActionStorage,
     _connection: CommunicationClient,
+    _on_disconnect: Arc<Mutex<Option<Box<dyn Fn () + Send + Sync>>>>,
 }
 
 impl Drop for SignalRClient {
@@ -199,11 +202,13 @@ impl SignalRClient {
             if res.is_ok() {
                 let client  = res.unwrap();
                 let storage = client.get_storage();
+                let on_disconnect = client.get_on_disconnected();
 
                 if storage.is_ok() {
                     let ret = SignalRClient {
                         _actions: storage.unwrap(),
-                        _connection: client
+                        _connection: client,
+                        _on_disconnect: on_disconnect,
                     };    
     
                     Ok(ret)    
@@ -250,6 +255,15 @@ impl SignalRClient {
         self._actions.add_callback(target.clone(), callback, self.clone());
 
         StorageUnregistrationHandler::new(self._actions.clone(), target.clone())
+    }
+
+    pub fn on_disconnect(&mut self, callback: impl Fn() + Send + Sync + 'static)
+    {
+        if let Ok(mut lock) = self._on_disconnect.lock() {
+            lock.replace(Box::new(callback));
+        } else {
+            error!("Failed to lock on_disconnect mutex");
+        }
     }
 
     /// Invokes a specific target method on the SignalR hub and waits for the response.
@@ -528,6 +542,6 @@ impl SignalRClient {
 
 impl Clone for SignalRClient {
     fn clone(&self) -> Self {
-        Self { _actions: self._actions.clone(), _connection: self._connection.clone() }
+        Self { _actions: self._actions.clone(), _connection: self._connection.clone(), _on_disconnect: self._on_disconnect.clone() }
     }
 }

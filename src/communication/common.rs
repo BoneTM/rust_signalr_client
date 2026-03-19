@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::client::{Authentication, ConnectionConfiguration};
 use crate::execution::UpdatableActionStorage; 
 use crate::protocol::negotiate::NegotiateResponseV0;
@@ -28,6 +30,7 @@ pub trait Communication : Clone {
     async fn connect(configuration: &ConnectionData) -> Result<Self, String>;
     async fn send<T: Serialize>(&mut self, data: T) -> Result<(), String>;
     fn get_storage(&self) -> Result<UpdatableActionStorage, String>;
+    fn get_on_disconnected(&self) -> Arc<Mutex<Option<Box<dyn Fn () + Send + Sync>>>>;
     fn disconnect(&mut self);
 }
 
@@ -38,42 +41,47 @@ pub struct HttpClient {
 impl HttpClient {
     pub(crate) async fn negotiate(options: ConnectionConfiguration) -> Result<ConnectionData, String> {
         let negotiate_endpoint = format!("{}/negotiate?negotiateVersion=1", options.get_web_url()); 
-        let negotiation = HttpClient::post::<NegotiateResponseV0>(negotiate_endpoint.clone(), options.get_authentication()).await;
+        // let negotiation = HttpClient::post::<NegotiateResponseV0>(negotiate_endpoint.clone(), options.get_authentication()).await;
 
-        if negotiation.is_ok() {
-            let configuration = HttpClient::create_configuration(options.get_socket_url(), negotiation.unwrap());
+        // if negotiation.is_ok() {
+        let configuration = HttpClient::create_configuration(options.get_socket_url(), None);
 
-            if configuration.is_some() {
-                Ok(configuration.unwrap())
-            } else {
-                // "Only web sockets with text transport format are accepted. This combination is not avaialble on the hub"
-                Err(format!("The negotiation concluded no matching communication protocols"))
-            }
+        if configuration.is_some() {
+            Ok(configuration.unwrap())
         } else {
-            Err(format!("HTTP negotiation with endpoint {} failed {}", negotiate_endpoint, negotiation.unwrap_err().to_string()))
+            // "Only web sockets with text transport format are accepted. This combination is not avaialble on the hub"
+            Err(format!("The negotiation concluded no matching communication protocols"))
         }
+        // } else {
+        //     Err(format!("HTTP negotiation with endpoint {} failed {}", negotiate_endpoint, negotiation.unwrap_err().to_string()))
+        // }
     }
 
-    fn create_configuration(endpoint: String, negotiate: NegotiateResponseV0) -> Option<ConnectionData> {
-        let fit = negotiate
-            .available_transports
-            .iter()
-            .find(|i| i.transport == WEB_SOCKET_TRANSPORT)
-            .and_then(|i| {
-                i.transfer_formats
-                    .iter()
-                    .find(|j| j.as_str() == TEXT_TRANSPORT_FORMAT)
-            })
-            .is_some();
+    fn create_configuration(endpoint: String, negotiate: Option<NegotiateResponseV0>) -> Option<ConnectionData> {
+        // let fit = negotiate
+        //     .available_transports
+        //     .iter()
+        //     .find(|i| i.transport == WEB_SOCKET_TRANSPORT)
+        //     .and_then(|i| {
+        //         i.transfer_formats
+        //             .iter()
+        //             .find(|j| j.as_str() == TEXT_TRANSPORT_FORMAT)
+        //     })
+        //     .is_some();
 
-        if fit {
-            Some(ConnectionData {
-                endpoint: endpoint,
-                connection_id: negotiate.connection_id,
-            })
-        } else {
-            None
-        }
+        Some(ConnectionData {
+            endpoint,
+            connection_id: String::new(),
+        })
+
+        // if fit {
+        //     Some(ConnectionData {
+        //         endpoint: endpoint,
+        //         connection_id: negotiate.connection_id,
+        //     })
+        // } else {
+        //     None
+        // }
     }
 
     fn basic_auth(username: String, password: Option<String>) -> String        
